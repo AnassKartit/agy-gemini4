@@ -1,0 +1,248 @@
+"""agy-gemini4 relay: lets Google Antigravity (the agy CLI and the desktop app) use Gemini 4 Carbon and Gemini 4 Argon
+with your own Gemini API key.
+
+Why it is needed: on an API key, Antigravity lists only older models. Its gateway mode (AGY_LLM_GATEWAY_URL +
+AGY_LLM_GATEWAY_MODELS) can offer Gemini 4, but it sends the model as "gemini-4-carbon-high" (effort glued on), which
+the Gemini API rejects with 404, and the desktop app sends the key as a Bearer token, which the API rejects with 401.
+This relay runs on your Mac (127.0.0.1 only), fixes those two things, forwards everything else unchanged to
+generativelanguage.googleapis.com, and writes Google's token counts for every call to a local usage file.
+
+Your key is read from GEMINI_API_KEY or from the macOS Keychain (item "agy-gemini4"), never written into app settings.
+`python3 relay.py --cost` prints what your calls cost at Google's list price.
+"""
+import argparse, json, os, re, ssl, time, urllib.error, urllib.request
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+
+UPSTREAM = "https://generativelanguage.googleapis.com"
+CTX = ssl.create_default_context(cafile="/etc/ssl/cert.pem")
+MODEL_RE = re.compile(r"models/(gemini-4-(?:argon|carbon))-(low|medium|high)(?=[:/?]|$)")
+HOP = {"host", "content-length", "connection", "accept-encoding", "transfer-encoding"}
+def _key():
+    if os.environ.get("GEMINI_API_KEY"):
+        return os.environ["GEMINI_API_KEY"]
+    try:
+        import subprocess
+        return subprocess.run(["security", "find-generic-password", "-s", "agy-gemini4", "-w"],
+                              capture_output=True, text=True).stdout.strip()
+    except OSError:
+        return ""
+
+
+KEY = _key()
+THINKING_OVERRIDE = Path.home() / ".agy-gemini4" / "thinking"
+
+
+class Relay(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, *a):
+        pass
+
+    def _forward(self):
+        if self.command == "GET" and self.path.split("?")[0] in ("/", "/dashboard"):
+            return self._dashboard()
+        t0 = time.time()
+        body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        path, level = self.path, None
+        m = MODEL_RE.search(path)
+        if m:
+            level = m.group(2)
+            path = MODEL_RE.sub(r"models/\1", path)
+        req_info = {}
+        if body and b"enhanced_content" in body:
+            # Antigravity 2.x sends google_search.enhanced_content.imageSearch, which the Gemini API rejects (400)
+            try:
+                j = json.loads(body)
+                for t in j.get("tools") or []:
+                    for k in ("google_search", "googleSearch"):
+                        if isinstance(t.get(k), dict):
+                            t[k].pop("enhanced_content", None)
+                            t[k].pop("enhancedContent", None)
+                body = json.dumps(j).encode()
+            except ValueError:
+                pass
+        if body and level:
+            try:
+                j = json.loads(body)
+                gc = j.setdefault("generationConfig", {})
+                tc = gc.setdefault("thinkingConfig", {})
+                tc.pop("thinkingBudget", None)
+                tc["thinkingLevel"] = level
+                req_info = {"maxOutputTokens": gc.get("maxOutputTokens"), "thinkingLevel": level}
+                body = json.dumps(j).encode()
+            except ValueError:
+                pass
+        elif body and "generatecontent" in path.lower():
+            # other clients (opencode, the Antigravity app) set the effort themselves; record what they asked for.
+            # The app has no effort picker on a gateway model and always asks HIGH (10 to 20 s a step, measured); a word in THINKING_OVERRIDE (low, medium, high) replaces it for Argon calls.
+            try:
+                j = json.loads(body)
+                over = THINKING_OVERRIDE.read_text().strip().upper() if THINKING_OVERRIDE.exists() else ""
+                if over and ("gemini-4-argon" in path or "gemini-4-carbon" in path):
+                    j.setdefault("generationConfig", {}).setdefault("thinkingConfig", {})["thinkingLevel"] = over
+                    j["generationConfig"]["thinkingConfig"].pop("thinkingBudget", None)
+                    body = json.dumps(j).encode()
+                gc = j.get("generationConfig", {})
+                tc = gc.get("thinkingConfig", {})
+                req_info = {"maxOutputTokens": gc.get("maxOutputTokens"),
+                            "thinkingLevel": tc.get("thinkingLevel"), "thinkingBudget": tc.get("thinkingBudget"),
+                            # which tools the client offered the model (to debug MCP tools that never reach it)
+                            "tools": sorted(f.get("name", "?") for t in j.get("tools") or []
+                                            for f in t.get("functionDeclarations") or t.get("function_declarations") or [])}
+            except ValueError:
+                pass
+        headers = {k: v for k, v in self.headers.items() if k.lower() not in HOP}
+        # agy's side calls (titles, summaries) ask for an 8 s deadline; the Gemini API rejects anything under 10 s (400)
+        for k, v in list(headers.items()):
+            if "timeout" in k.lower() and re.fullmatch(r"\d+(\.\d+)?", v.strip()) and float(v) < 10:
+                headers[k] = "10"
+        # the Antigravity app's gateway mode sends the key as "Authorization: Bearer <key>"; the Gemini API wants
+        # API keys in x-goog-api-key (Bearer is for OAuth tokens only, 401 otherwise)
+        for k, v in list(headers.items()):
+            if k.lower() == "authorization" and v.startswith(("Bearer AIza", "Bearer AQ.")):  # old and new key formats
+                del headers[k]
+                headers["x-goog-api-key"] = v[len("Bearer "):]
+        # clients set up with the placeholder key "relay" (setup.sh) get the key from this process's
+        # GEMINI_API_KEY, so it is never written into their settings
+        for k, v in list(headers.items()):
+            if k.lower() in ("authorization", "x-goog-api-key") and v in ("Bearer relay", "relay"):
+                del headers[k]
+        if KEY and not any(k.lower() in ("authorization", "x-goog-api-key") for k in headers) and "key=" not in path:
+            headers["x-goog-api-key"] = KEY
+        req = urllib.request.Request(UPSTREAM + path, data=body or None, headers=headers, method=self.command)
+        try:
+            resp = urllib.request.urlopen(req, timeout=1800, context=CTX)
+            status = resp.status
+        except urllib.error.HTTPError as e:
+            resp, status = e, e.code
+        self.send_response(status)
+        for k, v in resp.headers.items():
+            if k.lower() not in HOP:
+                self.send_header(k, v)
+        self.send_header("Transfer-Encoding", "chunked")
+        self.end_headers()
+        usage, tail, client_closed = None, b"", False
+        while True:
+            chunk = resp.read1(65536) if hasattr(resp, "read1") else resp.read(65536)
+            if not chunk:
+                break
+            tail = (tail + chunk)[-200000:]
+            try:
+                self.wfile.write(b"%x\r\n%s\r\n" % (len(chunk), chunk))
+                self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError):
+                # the client gave up mid-stream (agy cancels some calls); still log the usage Google reported so far
+                client_closed = True
+                resp.close()
+                break
+        if not client_closed:
+            try:
+                self.wfile.write(b"0\r\n\r\n")
+            except (BrokenPipeError, ConnectionResetError):
+                client_closed = True
+        for u in re.findall(rb'"usageMetadata"\s*:\s*(\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\})', tail):
+            try:
+                usage = json.loads(u)  # the last one in a stream is the cumulative total
+            except ValueError:
+                pass
+        if status == 400 and body and self.server.ledger:
+            # keep the rejected request (no key: it travels in a header) so a 400 can be diagnosed
+            dump = os.path.join(os.path.dirname(self.server.ledger), "rejected", f"{int(t0)}.json")
+            os.makedirs(os.path.dirname(dump), exist_ok=True)
+            with open(dump, "wb") as f:
+                f.write(body)
+        if self.server.ledger and ("generateContent" in path or "streamGenerateContent" in path):
+            with open(self.server.ledger, "a") as f:
+                f.write(json.dumps({"t": round(t0, 3), "seconds": round(time.time() - t0, 2), "status": status,
+                                    "path": path.split("?")[0], "agy_model": m.group(0) if m else None,
+                                    **req_info, "usage": usage, **({"client_closed": True} if client_closed else {}),
+                                    **({"error": tail[-600:].decode("utf-8", "replace")} if status >= 400 else {})}) + "\n")
+
+    def _dashboard(self):
+        rows = []
+        if self.server.ledger and os.path.exists(self.server.ledger):
+            rows = [json.loads(l) for l in open(self.server.ledger) if l.strip()]
+        html = dashboard_html(rows).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(html)))
+        self.end_headers()
+        self.wfile.write(html)
+
+    do_GET = do_POST = _forward
+
+
+# list price per 1M tokens (aistudio.google.com/docs/pricing): input, cached input, output incl. thinking
+PRICE = {"gemini-4-carbon": (2.00, 0.10, 10.00), "gemini-4-argon": (2.00, 0.10, 10.00)}  # until 2026-11-30; x2 after
+
+
+def call_cost(r):
+    """(model, input tokens, output tokens, usd) for one ledger row, or None."""
+    u, mod = r.get("usage") or {}, next((m for m in PRICE if m in r.get("path", "")), None)
+    if not mod or not u:
+        return None
+    p, c = u.get("promptTokenCount", 0), u.get("cachedContentTokenCount", 0)
+    o = u.get("candidatesTokenCount", 0) + u.get("thoughtsTokenCount", 0)
+    i, ci, oi = PRICE[mod]
+    return mod, p, o, (p - c) / 1e6 * i + c / 1e6 * ci + o / 1e6 * oi
+
+
+def dashboard_html(rows):
+    day = time.strftime("%Y-%m-%d")
+    tot, today, last = {}, {}, []
+    for r in rows:
+        cc = call_cost(r)
+        if not cc:
+            continue
+        mod, p, o, usd = cc
+        for d, keep in ((tot, True), (today, time.strftime("%Y-%m-%d", time.localtime(r["t"])) == day)):
+            if keep:
+                t = d.setdefault(mod, [0, 0, 0, 0.0]); t[0] += 1; t[1] += p; t[2] += o; t[3] += usd
+        last.append((r, mod, p, o, usd))
+    def cards(d, title):
+        if not d:
+            return f"<section><h2>{title}</h2><p class=dim>No Gemini 4 calls yet.</p></section>"
+        out = "".join(f"<div class=card><b>{m.replace('gemini-4-', 'Gemini 4 ').title()}</b><big>${v[3]:.2f}</big>"
+                      f"<span>{v[0]} calls &middot; {v[1]:,} in &middot; {v[2]:,} out</span></div>" for m, v in d.items())
+        return f"<section><h2>{title}</h2><div class=row>{out}</div></section>"
+    trs = "".join(f"<tr><td>{time.strftime('%H:%M:%S', time.localtime(r['t']))}</td><td>{m.replace('gemini-4-', '')}</td>"
+                  f"<td>{r.get('thinkingLevel') or ''}</td><td>{r['seconds']:.1f} s</td><td>{p:,}</td><td>{o:,}</td>"
+                  f"<td>${usd:.4f}</td><td class={'ok' if r['status'] == 200 else 'bad'}>{r['status']}</td></tr>"
+                  for r, m, p, o, usd in reversed(last[-25:]))
+    return f"""<!doctype html><meta charset=utf-8><meta http-equiv=refresh content=5><title>agy-gemini4</title>
+<style>body{{margin:0;padding:32px 40px;background:#0b0f1a;color:#e6ebf5;font:15px/1.4 -apple-system,system-ui,sans-serif}}
+h1{{font-size:26px;margin:0 0 4px}}h2{{font-size:14px;letter-spacing:.08em;text-transform:uppercase;color:#9aa4bf;margin:28px 0 10px}}
+.dim{{color:#9aa4bf}}.row{{display:flex;gap:16px;flex-wrap:wrap}}.card{{background:#141a2e;border:1px solid #26304d;border-radius:14px;
+padding:16px 20px;min-width:240px;display:flex;flex-direction:column;gap:4px}}.card big{{font-size:34px;font-weight:700;color:#7cc4ff}}
+.card span{{color:#9aa4bf;font-size:13px}}table{{border-collapse:collapse;width:100%;font:13px ui-monospace,Menlo,monospace}}
+td,th{{padding:6px 10px;border-bottom:1px solid #1e2640;text-align:left}}th{{color:#9aa4bf;font-weight:600}}.ok{{color:#22c55e}}.bad{{color:#ff5a7a}}</style>
+<h1>Gemini 4 in Antigravity</h1><div class=dim>agy-gemini4 relay &middot; list prices from aistudio.google.com/docs/pricing &middot; refreshes every 5 s</div>
+{cards(today, "Today")}{cards(tot, "All time")}
+<section><h2>Last calls</h2><table><tr><th>time</th><th>model</th><th>effort</th><th>took</th><th>in</th><th>out</th><th>cost</th><th>status</th></tr>{trs}</table></section>"""
+
+
+def cost(ledger):
+    tot = {}
+    for line in open(ledger):
+        cc = call_cost(json.loads(line))
+        if cc:
+            t = tot.setdefault(cc[0], [0, 0.0]); t[0] += 1; t[1] += cc[3]
+    for mod, (n, usd) in tot.items():
+        print(f"{mod}: {n} calls, ${usd:.2f} at list price")
+
+
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--port", type=int, default=8918)
+    ap.add_argument("--ledger", default=str(Path.home() / ".agy-gemini4" / "usage.jsonl"))
+    ap.add_argument("--cost", action="store_true", help="print what the logged calls cost, then exit")
+    a = ap.parse_args()
+    if a.cost:
+        cost(a.ledger)
+        raise SystemExit
+    os.makedirs(os.path.dirname(a.ledger), exist_ok=True)
+    srv = ThreadingHTTPServer(("127.0.0.1", a.port), Relay)
+    srv.ledger = a.ledger
+    print(f"agy-gemini4 relay on http://127.0.0.1:{a.port} -> {UPSTREAM}", flush=True)
+    srv.serve_forever()

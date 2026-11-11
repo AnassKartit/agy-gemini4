@@ -31,6 +31,19 @@ def _key():
 
 KEY = _key()
 THINKING_OVERRIDE = Path.home() / ".agy-gemini4" / "thinking"
+KEEP_OUTPUT_LIMIT = Path.home() / ".agy-gemini4" / "keep_output_limit"
+MIN_OUTPUT = 65536   # Gemini 4 Carbon and Argon can write 65K tokens in one reply
+
+
+def raise_output_limit(j, path):
+    """agy asks gateway models for only 8,192 output tokens. At high effort the model's thinking uses most of that, and a
+    long file gets cut off ("exceeded the output token limit", measured on agy 1.5.5 with Carbon, 2026-11-11). For Gemini 4
+    models the limit is raised to MIN_OUTPUT unless the file ~/.agy-gemini4/keep_output_limit exists. Returns what was asked."""
+    gc = j.setdefault("generationConfig", {})
+    asked = gc.get("maxOutputTokens")
+    if "gemini-4-" in path and not KEEP_OUTPUT_LIMIT.exists() and (asked is None or asked < MIN_OUTPUT):
+        gc["maxOutputTokens"] = MIN_OUTPUT
+    return asked
 
 
 class Relay(BaseHTTPRequestHandler):
@@ -69,7 +82,8 @@ class Relay(BaseHTTPRequestHandler):
                 tc = gc.setdefault("thinkingConfig", {})
                 tc.pop("thinkingBudget", None)
                 tc["thinkingLevel"] = level
-                req_info = {"maxOutputTokens": gc.get("maxOutputTokens"), "thinkingLevel": level}
+                asked = raise_output_limit(j, path)
+                req_info = {"maxOutputTokens": gc.get("maxOutputTokens"), "maxOutputTokensAsked": asked, "thinkingLevel": level}
                 body = json.dumps(j).encode()
             except ValueError:
                 pass
@@ -83,9 +97,11 @@ class Relay(BaseHTTPRequestHandler):
                     j.setdefault("generationConfig", {}).setdefault("thinkingConfig", {})["thinkingLevel"] = over
                     j["generationConfig"]["thinkingConfig"].pop("thinkingBudget", None)
                     body = json.dumps(j).encode()
+                asked = raise_output_limit(j, path)
+                body = json.dumps(j).encode()
                 gc = j.get("generationConfig", {})
                 tc = gc.get("thinkingConfig", {})
-                req_info = {"maxOutputTokens": gc.get("maxOutputTokens"),
+                req_info = {"maxOutputTokens": gc.get("maxOutputTokens"), "maxOutputTokensAsked": asked,
                             "thinkingLevel": tc.get("thinkingLevel"), "thinkingBudget": tc.get("thinkingBudget"),
                             # which tools the client offered the model (to debug MCP tools that never reach it)
                             "tools": sorted(f.get("name", "?") for t in j.get("tools") or []

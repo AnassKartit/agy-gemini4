@@ -59,6 +59,14 @@ passes both through and logs what was really sent to Google. Measured through th
 In October 2026 the desktop app had no effort picker for these models and always asked for high; write `low`,
 `medium` or `high` into `~/.agy-gemini4/thinking` to set it for Gemini 4 calls (delete the file to stop).
 
+## The output limit (why Carbon can fail on big files without this)
+
+agy asks gateway models for only 8,192 output tokens per reply. At high effort Carbon's thinking uses most of that, so
+a long file never gets written: on 11 November 2026 a Carbon run in agy 1.5.5 stopped after 21 minutes with "Your
+previous response was cut off because it exceeded the output token limit. Output retries exhausted after 4 attempts".
+The relay raises the limit to 65,536 for Gemini 4 models (the usage log keeps both numbers). To keep agy's own limit,
+create the empty file `~/.agy-gemini4/keep_output_limit`.
+
 ## What the relay is for
 
 `relay.py` is one Python file with no dependencies. It forwards requests unchanged to

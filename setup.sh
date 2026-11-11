@@ -1,13 +1,15 @@
 #!/bin/sh
-# Gemini 4 Carbon and Argon in Google Antigravity (agy CLI + desktop app) with your own Gemini API key. macOS.
-#   ./setup.sh           install (asks for your key once, keeps it in the macOS Keychain)
-#   ./setup.sh --remove  undo everything
+# Gemini 4 Carbon, Argon and the other Gemini models on your key, in Google Antigravity (agy CLI + desktop app),
+# with your own Gemini API key. macOS.
+#   ./setup.sh                      install (asks for your key once, keeps it in the macOS Keychain)
+#   ./setup.sh --models a,b,c       install with exactly these models in Antigravity's model menu
+#   ./setup.sh --remove             undo everything
 # What it installs: the local relay (relay.py, 127.0.0.1:8918, starts at login), the app settings at login, and an
 # `agy` shell function in ~/.zshrc. Your key is never written into a settings file.
 set -e
 DIR=$(cd "$(dirname "$0")" && pwd); PORT=8918; LA="$HOME/Library/LaunchAgents"; D="gui/$(id -u)"
 RELAY=net.agy-gemini4.relay; ENV=net.agy-gemini4.env; RC="$HOME/.zshrc"; MARK="# agy-gemini4"
-MODELS=gemini-4-carbon,gemini-4-argon; HOME_DIR="$HOME/.agy-gemini4"
+MODELS=""; [ "$1" = "--models" ] && MODELS="$2"; HOME_DIR="$HOME/.agy-gemini4"
 
 for l in $RELAY $ENV; do launchctl bootout "$D/$l" 2>/dev/null || true; rm -f "$LA/$l.plist"; done
 for v in AGY_LLM_GATEWAY_URL AGY_LLM_GATEWAY_MODELS AGY_LLM_GATEWAY_API_KEY; do launchctl unsetenv $v; done
@@ -25,10 +27,20 @@ if ! security find-generic-password -s agy-gemini4 -w >/dev/null 2>&1; then
 fi
 KEY=$(security find-generic-password -s agy-gemini4 -w)
 
-echo "Checking which Gemini 4 models your key can use..."
+echo "Checking which Gemini models your key can use..."
 LIST=$(curl -s "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000" -H "x-goog-api-key: $KEY")
-FOUND=$(echo "$LIST" | grep -o '"models/gemini-4-[a-z]*"' | tr -d '"' | sed 's|models/||' | sort -u | tr '\n' ' ')
-[ -n "$FOUND" ] && echo "  your key can use: $FOUND" || { echo "  no Gemini 4 model on this key (billing on?)"; exit 1; }
+# default menu: every Gemini 4 model on the key (Carbon first) plus the newest Flash model
+FOUND=$(echo "$LIST" | "$PY" -c '
+import json, re, sys
+try: ms = json.load(sys.stdin).get("models", [])
+except ValueError: ms = []
+names = [m["name"].split("/")[-1] for m in ms if "generateContent" in m.get("supportedGenerationMethods", [])]
+g4 = sorted((n for n in names if re.fullmatch(r"gemini-4-[a-z]+", n)), key=lambda n: (n != "gemini-4-carbon", n))
+flash = sorted((n for n in names if re.fullmatch(r"gemini-\d+\.\d+-flash", n)), key=lambda n: [int(x) for x in re.findall(r"\d+", n)])
+print(",".join(g4 + flash[-1:]))')
+[ -n "$FOUND" ] || { echo "  no Gemini model found on this key (is billing on for its project?)"; exit 1; }
+[ -n "$MODELS" ] || MODELS="$FOUND"
+echo "  models for Antigravity: $MODELS"
 KEY=
 
 mkdir -p "$LA" "$HOME_DIR"

@@ -16,7 +16,7 @@ from pathlib import Path
 
 UPSTREAM = "https://generativelanguage.googleapis.com"
 CTX = ssl.create_default_context(cafile="/etc/ssl/cert.pem")
-MODEL_RE = re.compile(r"models/(gemini-4-(?:argon|carbon))-(low|medium|high)(?=[:/?]|$)")
+MODEL_RE = re.compile(r"models/(gemini-[a-z0-9.\-]+?)-(low|medium|high)(?=[:/?]|$)")  # effort glued to the name
 HOP = {"host", "content-length", "connection", "accept-encoding", "transfer-encoding"}
 def _key():
     if os.environ.get("GEMINI_API_KEY"):
@@ -178,12 +178,15 @@ PRICE = {"gemini-4-carbon": (2.00, 0.10, 10.00), "gemini-4-argon": (2.00, 0.10, 
 
 
 def call_cost(r):
-    """(model, input tokens, output tokens, usd) for one ledger row, or None."""
-    u, mod = r.get("usage") or {}, next((m for m in PRICE if m in r.get("path", "")), None)
-    if not mod or not u:
+    """(model, input tokens, output tokens, usd or None when no price is known) for one usage row, or None."""
+    u, m = r.get("usage") or {}, re.search(r"models/([^:/?]+)", r.get("path", ""))
+    if not m or not u:
         return None
+    mod = m.group(1)
     p, c = u.get("promptTokenCount", 0), u.get("cachedContentTokenCount", 0)
     o = u.get("candidatesTokenCount", 0) + u.get("thoughtsTokenCount", 0)
+    if mod not in PRICE:
+        return mod, p, o, None
     i, ci, oi = PRICE[mod]
     return mod, p, o, (p - c) / 1e6 * i + c / 1e6 * ci + o / 1e6 * oi
 
@@ -198,17 +201,17 @@ def dashboard_html(rows):
         mod, p, o, usd = cc
         for d, keep in ((tot, True), (today, time.strftime("%Y-%m-%d", time.localtime(r["t"])) == day)):
             if keep:
-                t = d.setdefault(mod, [0, 0, 0, 0.0]); t[0] += 1; t[1] += p; t[2] += o; t[3] += usd
+                t = d.setdefault(mod, [0, 0, 0, 0.0, mod in PRICE]); t[0] += 1; t[1] += p; t[2] += o; t[3] += usd or 0
         last.append((r, mod, p, o, usd))
     def cards(d, title):
         if not d:
-            return f"<section><h2>{title}</h2><p class=dim>No Gemini 4 calls yet.</p></section>"
-        out = "".join(f"<div class=card><b>{m.replace('gemini-4-', 'Gemini 4 ').title()}</b><big>${v[3]:.2f}</big>"
+            return f"<section><h2>{title}</h2><p class=dim>No calls yet.</p></section>"
+        out = "".join(f"<div class=card><b>{m.replace('gemini-', 'Gemini ').replace('-', ' ').title()}</b><big>{f'${v[3]:.2f}' if v[4] else 'no price set'}</big>"
                       f"<span>{v[0]} calls &middot; {v[1]:,} in &middot; {v[2]:,} out</span></div>" for m, v in d.items())
         return f"<section><h2>{title}</h2><div class=row>{out}</div></section>"
-    trs = "".join(f"<tr><td>{time.strftime('%H:%M:%S', time.localtime(r['t']))}</td><td>{m.replace('gemini-4-', '')}</td>"
+    trs = "".join(f"<tr><td>{time.strftime('%H:%M:%S', time.localtime(r['t']))}</td><td>{m.replace('gemini-', '')}</td>"
                   f"<td>{r.get('thinkingLevel') or ''}</td><td>{r['seconds']:.1f} s</td><td>{p:,}</td><td>{o:,}</td>"
-                  f"<td>${usd:.4f}</td><td class={'ok' if r['status'] == 200 else 'bad'}>{r['status']}</td></tr>"
+                  f"<td>{f'${usd:.4f}' if usd is not None else 'n/a'}</td><td class={'ok' if r['status'] == 200 else 'bad'}>{r['status']}</td></tr>"
                   for r, m, p, o, usd in reversed(last[-25:]))
     return f"""<!doctype html><meta charset=utf-8><meta http-equiv=refresh content=5><title>agy-gemini4</title>
 <style>body{{margin:0;padding:32px 40px;background:#0b0f1a;color:#e6ebf5;font:15px/1.4 -apple-system,system-ui,sans-serif}}
@@ -217,19 +220,21 @@ h1{{font-size:26px;margin:0 0 4px}}h2{{font-size:14px;letter-spacing:.08em;text-
 padding:16px 20px;min-width:240px;display:flex;flex-direction:column;gap:4px}}.card big{{font-size:34px;font-weight:700;color:#7cc4ff}}
 .card span{{color:#9aa4bf;font-size:13px}}table{{border-collapse:collapse;width:100%;font:13px ui-monospace,Menlo,monospace}}
 td,th{{padding:6px 10px;border-bottom:1px solid #1e2640;text-align:left}}th{{color:#9aa4bf;font-weight:600}}.ok{{color:#22c55e}}.bad{{color:#ff5a7a}}</style>
-<h1>Gemini 4 in Antigravity</h1><div class=dim>agy-gemini4 relay &middot; list prices from aistudio.google.com/docs/pricing &middot; refreshes every 5 s</div>
+<h1>Gemini in Antigravity</h1><div class=dim>agy-gemini4 relay &middot; list prices from aistudio.google.com/docs/pricing &middot; refreshes every 5 s</div>
 {cards(today, "Today")}{cards(tot, "All time")}
 <section><h2>Last calls</h2><table><tr><th>time</th><th>model</th><th>effort</th><th>took</th><th>in</th><th>out</th><th>cost</th><th>status</th></tr>{trs}</table></section>"""
 
 
 def cost(ledger):
+    if not os.path.exists(ledger):
+        print("No calls logged yet."); return
     tot = {}
     for line in open(ledger):
         cc = call_cost(json.loads(line))
         if cc:
-            t = tot.setdefault(cc[0], [0, 0.0]); t[0] += 1; t[1] += cc[3]
-    for mod, (n, usd) in tot.items():
-        print(f"{mod}: {n} calls, ${usd:.2f} at list price")
+            t = tot.setdefault(cc[0], [0, 0.0, cc[3] is not None]); t[0] += 1; t[1] += cc[3] or 0
+    for mod, (n, usd, priced) in tot.items():
+        print(f"{mod}: {n} calls, " + (f"${usd:.2f} at list price" if priced else "no price set in relay.py"))
 
 
 if __name__ == "__main__":

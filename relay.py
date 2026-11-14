@@ -190,7 +190,8 @@ class Relay(BaseHTTPRequestHandler):
 
 
 # list price per 1M tokens (aistudio.google.com/docs/pricing): input, cached input, output incl. thinking
-PRICE = {"gemini-4-carbon": (2.00, 0.10, 10.00), "gemini-4-argon": (2.00, 0.10, 10.00)}  # until 2026-11-30; x2 after
+PRICE = {"gemini-4-carbon": (2.00, 0.10, 10.00), "gemini-4-argon": (2.00, 0.10, 10.00),  # until 2026-11-30; x2 after
+         "gemini-4-hydrogen": (1.50, 0.075, 7.50)}                                       # no change announced
 
 
 def call_cost(r):

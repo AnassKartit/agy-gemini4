@@ -96,10 +96,13 @@ Gemini 4 Carbon and Argon are paid-tier only. List prices per 1M tokens
 | until 2026-11-30 | $2.00 | $0.10 | $10.00 |
 | from 2026-12-01 | $4.00 | $0.20 | $20.00 |
 
+Gemini 4 Hydrogen (same page, 14 November 2026): $1.50 input, $0.075 cached input, $7.50 output per 1M tokens, no
+change announced.
+
 Measured: a playable one-file snake game built by agy on Carbon took 3 calls and cost **$0.12**. An agent re-sends its
 whole context at every step, so long sessions add up; most of it is billed at the cached price.
-`python3 relay.py --cost` prints your total. `relay.py` holds prices for Carbon and Argon only (`PRICE`; update it
-after 2026-11-30); other models are counted with their tokens and shown as "no price set".
+`python3 relay.py --cost` prints your total. `relay.py` holds prices for Carbon, Argon and Hydrogen (`PRICE`; update
+Carbon and Argon after 2026-11-30); other models are counted with their tokens and shown as "no price set".
 
 ## Tested
 

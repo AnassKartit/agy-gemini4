@@ -184,8 +184,15 @@ class Relay(BaseHTTPRequestHandler):
         self.send_header("Transfer-Encoding", "chunked")
         self.end_headers()
         usage, tail, client_closed = None, b"", False
+        upstream_error = None
         while True:
-            chunk = resp.read1(65536) if hasattr(resp, "read1") else resp.read(65536)
+            try:
+                chunk = resp.read1(65536) if hasattr(resp, "read1") else resp.read(65536)
+            except (OSError, http.client.HTTPException) as e:
+                # Google dropped the stream mid-reply (seen: "Connection reset by peer"). End the reply cleanly so the
+                # client sees a finished response and retries, instead of waiting on a connection that never closes.
+                upstream_error = f"{type(e).__name__}: {e}"
+                break
             if not chunk:
                 break
             tail = (tail + chunk)[-200000:]
@@ -219,6 +226,7 @@ class Relay(BaseHTTPRequestHandler):
                                     "path": path.split("?")[0], "agy_model": m.group(0) if m else None,
                                     **req_info, "usage": usage, **({"client_closed": True} if client_closed else {}),
                                     **({"label": LABEL_FILE.read_text().strip()} if LABEL_FILE.exists() else {}),
+                                    **({"upstream_error": upstream_error} if upstream_error else {}),
                                     **({"error": tail[-600:].decode("utf-8", "replace")} if status >= 400 else {})}) + "\n")
 
     def _dashboard(self):

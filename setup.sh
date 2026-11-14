@@ -29,7 +29,7 @@ KEY=$(security find-generic-password -s agy-gemini4 -w)
 
 echo "Checking which Gemini models your key can use..."
 LIST=$(curl -s "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000" -H "x-goog-api-key: $KEY")
-# default menu: every Gemini 4 model on the key (Carbon first) plus the newest Flash model
+# default menu: every Gemini 4 model on the key (Carbon first) at three efforts, plus the newest Flash model
 FOUND=$(echo "$LIST" | "$PY" -c '
 import json, re, sys
 try: ms = json.load(sys.stdin).get("models", [])
@@ -37,6 +37,7 @@ except ValueError: ms = []
 names = [m["name"].split("/")[-1] for m in ms if "generateContent" in m.get("supportedGenerationMethods", [])]
 g4 = sorted((n for n in names if re.fullmatch(r"gemini-4-[a-z]+", n)), key=lambda n: (n != "gemini-4-carbon", n))
 flash = sorted((n for n in names if re.fullmatch(r"gemini-\d+\.\d+-flash", n)), key=lambda n: [int(x) for x in re.findall(r"\d+", n)])
+g4 = [v for n in g4 for v in (n, n + "-low", n + "-high")]   # each model at medium (its plain name), low and high: agy and the app show them as efforts
 print(",".join(g4 + flash[-1:]))')
 [ -n "$FOUND" ] || { echo "  no Gemini model found on this key (is billing on for its project?)"; exit 1; }
 [ -n "$MODELS" ] || MODELS="$FOUND"

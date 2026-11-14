@@ -64,6 +64,14 @@ passes both through and logs what was really sent to Google. Measured through th
 In October 2026 the desktop app had no effort picker for these models and always asked for high; write `low`,
 `medium` or `high` into `~/.agy-gemini4/thinking` to set it for Gemini 4 calls (delete the file to stop).
 
+## Effort (Low, Medium, High) in the menus
+
+The installer lists each Gemini 4 model three times: `gemini-4-carbon` (Medium), `gemini-4-carbon-low` and
+`gemini-4-carbon-high`. agy's `/model` and the desktop app's model menu then offer all three efforts; the relay turns
+the suffix into Google's `thinkingLevel` (measured 14 November 2026: `gemini-4-carbon-high` arrives as Carbon with
+`thinkingLevel: HIGH`). In the terminal `--effort low|medium|high` works too. The desktop app has no separate effort
+control: pick the effort in the model menu.
+
 ## The output limit (why Carbon can fail on big files without this)
 
 agy asks gateway models for only 8,192 output tokens per reply. At high effort Carbon's thinking uses most of that, so

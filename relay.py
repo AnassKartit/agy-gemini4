@@ -32,6 +32,35 @@ def _key():
 KEY = _key()
 THINKING_OVERRIDE = Path.home() / ".agy-gemini4" / "thinking"
 KEEP_OUTPUT_LIMIT = Path.home() / ".agy-gemini4" / "keep_output_limit"
+CAP_FILE = Path.home() / ".agy-gemini4" / "daily_cap"   # a dollar amount: model calls are refused once today's spend reaches it
+LABEL_FILE = Path.home() / ".agy-gemini4" / "label"     # text attached to every call logged while it exists (a run name)
+_spend = {"key": None, "usd": 0.0}
+
+
+def read_cap():
+    try:
+        return float(CAP_FILE.read_text().strip())
+    except (OSError, ValueError):
+        return None
+
+
+def today_spend(ledger):
+    """List-price dollars of today's calls (local time), recomputed only when the ledger grows."""
+    if not ledger or not os.path.exists(ledger):
+        return 0.0
+    key = (os.path.getsize(ledger), time.strftime("%Y-%m-%d"))
+    if _spend["key"] != key:
+        day, usd = key[1], 0.0
+        for line in open(ledger):
+            try:
+                r = json.loads(line)
+            except ValueError:
+                continue
+            if time.strftime("%Y-%m-%d", time.localtime(r.get("t", 0))) == day:
+                cc = call_cost(r)
+                usd += (cc[3] or 0) if cc else 0
+        _spend.update(key=key, usd=usd)
+    return _spend["usd"]
 MIN_OUTPUT = 65536   # Gemini 4 Carbon and Argon can write 65K tokens in one reply
 
 
@@ -57,6 +86,22 @@ class Relay(BaseHTTPRequestHandler):
             return self._dashboard()
         t0 = time.time()
         body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        cap = read_cap()
+        if cap is not None and "generatecontent" in self.path.lower() and today_spend(self.server.ledger) >= cap:
+            spent = today_spend(self.server.ledger)
+            msg = (f"agy-gemini4: daily spend cap reached (${spent:.2f} today at list price, cap ${cap:.2f}). "
+                   f"Raise it with: python3 relay.py --cap <dollars>, or remove it with --cap off.")
+            out = json.dumps({"error": {"code": 429, "message": msg, "status": "RESOURCE_EXHAUSTED"}}).encode()
+            self.send_response(429)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(out)))
+            self.end_headers()
+            self.wfile.write(out)
+            if self.server.ledger:
+                with open(self.server.ledger, "a") as f:
+                    f.write(json.dumps({"t": round(t0, 3), "seconds": 0, "status": 429, "path": self.path.split("?")[0],
+                                        "capped": True, "usage": None}) + "\n")
+            return
         path, level = self.path, None
         m = MODEL_RE.search(path)
         if m:
@@ -173,6 +218,7 @@ class Relay(BaseHTTPRequestHandler):
                 f.write(json.dumps({"t": round(t0, 3), "seconds": round(time.time() - t0, 2), "status": status,
                                     "path": path.split("?")[0], "agy_model": m.group(0) if m else None,
                                     **req_info, "usage": usage, **({"client_closed": True} if client_closed else {}),
+                                    **({"label": LABEL_FILE.read_text().strip()} if LABEL_FILE.exists() else {}),
                                     **({"error": tail[-600:].decode("utf-8", "replace")} if status >= 400 else {})}) + "\n")
 
     def _dashboard(self):
@@ -208,6 +254,16 @@ def call_cost(r):
     return mod, p, o, (p - c) / 1e6 * i + c / 1e6 * ci + o / 1e6 * oi
 
 
+def cap_line(today):
+    cap = read_cap()
+    spent = sum(v[3] for v in today.values())
+    label = LABEL_FILE.read_text().strip() if LABEL_FILE.exists() else ""
+    bits = [f"today ${spent:.2f}" + (f" of a ${cap:.2f} daily cap" if cap is not None else " (no daily cap)")]
+    if label:
+        bits.append(f"labelling calls as <b>{label}</b>")
+    return f"<p class=dim>{' &middot; '.join(bits)}</p>"
+
+
 def dashboard_html(rows):
     day = time.strftime("%Y-%m-%d")
     tot, today, last = {}, {}, []
@@ -226,8 +282,8 @@ def dashboard_html(rows):
         out = "".join(f"<div class=card><b>{m.replace('gemini-', 'Gemini ').replace('-', ' ').title()}</b><big>{f'${v[3]:.2f}' if v[4] else 'no price set'}</big>"
                       f"<span>{v[0]} calls &middot; {v[1]:,} in &middot; {v[2]:,} out</span></div>" for m, v in d.items())
         return f"<section><h2>{title}</h2><div class=row>{out}</div></section>"
-    trs = "".join(f"<tr><td>{time.strftime('%H:%M:%S', time.localtime(r['t']))}</td><td>{m.replace('gemini-', '')}</td>"
-                  f"<td>{r.get('thinkingLevel') or ''}</td><td>{r['seconds']:.1f} s</td><td>{p:,}</td><td>{o:,}</td>"
+    trs = "".join(f"<tr><td>{time.strftime('%H:%M:%S', time.localtime(r['t']))}</td><td>{r.get('label', '')}</td><td>{m.replace('gemini-', '')}</td>"
+                  f"<td>{(r.get('thinkingLevel') or '').upper()}</td><td>{r['seconds']:.1f} s</td><td>{p:,}</td><td>{o:,}</td>"
                   f"<td>{f'${usd:.4f}' if usd is not None else 'n/a'}</td><td class={'ok' if r['status'] == 200 else 'bad'}>{r['status']}</td></tr>"
                   for r, m, p, o, usd in reversed(last[-25:]))
     return f"""<!doctype html><meta charset=utf-8><meta http-equiv=refresh content=5><title>agy-gemini4</title>
@@ -238,20 +294,29 @@ padding:16px 20px;min-width:240px;display:flex;flex-direction:column;gap:4px}}.c
 .card span{{color:#9aa4bf;font-size:13px}}table{{border-collapse:collapse;width:100%;font:13px ui-monospace,Menlo,monospace}}
 td,th{{padding:6px 10px;border-bottom:1px solid #1e2640;text-align:left}}th{{color:#9aa4bf;font-weight:600}}.ok{{color:#22c55e}}.bad{{color:#ff5a7a}}</style>
 <h1>Gemini in Antigravity</h1><div class=dim>agy-gemini4 relay &middot; list prices from aistudio.google.com/docs/pricing &middot; refreshes every 5 s</div>
-{cards(today, "Today")}{cards(tot, "All time")}
-<section><h2>Last calls</h2><table><tr><th>time</th><th>model</th><th>effort</th><th>took</th><th>in</th><th>out</th><th>cost</th><th>status</th></tr>{trs}</table></section>"""
+{cap_line(today)}{cards(today, "Today")}{cards(tot, "All time")}
+<section><h2>Last calls</h2><table><tr><th>time</th><th>label</th><th>model</th><th>effort</th><th>took</th><th>in</th><th>out</th><th>cost</th><th>status</th></tr>{trs}</table></section>"""
 
 
 def cost(ledger):
     if not os.path.exists(ledger):
         print("No calls logged yet."); return
-    tot = {}
+    tot, labels = {}, {}
     for line in open(ledger):
-        cc = call_cost(json.loads(line))
+        r = json.loads(line)
+        cc = call_cost(r)
         if cc:
             t = tot.setdefault(cc[0], [0, 0.0, cc[3] is not None]); t[0] += 1; t[1] += cc[3] or 0
+            if r.get("label"):
+                l = labels.setdefault((r["label"], cc[0]), [0, 0.0, cc[3] is not None]); l[0] += 1; l[1] += cc[3] or 0
     for mod, (n, usd, priced) in tot.items():
         print(f"{mod}: {n} calls, " + (f"${usd:.2f} at list price" if priced else "no price set in relay.py"))
+    cap = read_cap()
+    print(f"today: ${today_spend(ledger):.2f}" + (f" of a ${cap:.2f} daily cap" if cap is not None else " (no daily cap)"))
+    if labels:
+        print("by label:")
+        for (lab, mod), (n, usd, priced) in labels.items():
+            print(f"  {lab} | {mod}: {n} calls, " + (f"${usd:.2f}" if priced else "no price set"))
 
 
 if __name__ == "__main__":
@@ -259,7 +324,21 @@ if __name__ == "__main__":
     ap.add_argument("--port", type=int, default=8918)
     ap.add_argument("--ledger", default=str(Path.home() / ".agy-gemini4" / "usage.jsonl"))
     ap.add_argument("--cost", action="store_true", help="print what the logged calls cost, then exit")
+    ap.add_argument("--cap", help="daily spend cap in dollars (list price), or 'off'")
+    ap.add_argument("--label", help="label every call from now on (a run name), or 'off'")
     a = ap.parse_args()
+    if a.cap or a.label:
+        CAP_FILE.parent.mkdir(parents=True, exist_ok=True)
+        for val, f, what in ((a.cap, CAP_FILE, "daily cap"), (a.label, LABEL_FILE, "label")):
+            if val is None:
+                continue
+            if val.lower() == "off":
+                f.unlink(missing_ok=True); print(f"{what} removed")
+            else:
+                if f is CAP_FILE:
+                    float(val)
+                f.write_text(val + "\n"); print(f"{what} set: {val}")
+        raise SystemExit
     if a.cost:
         cost(a.ledger)
         raise SystemExit

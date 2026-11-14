@@ -72,6 +72,24 @@ the suffix into Google's `thinkingLevel` (measured 14 November 2026: `gemini-4-c
 `thinkingLevel: HIGH`). In the terminal `--effort low|medium|high` works too. The desktop app has no separate effort
 control: pick the effort in the model menu.
 
+## Daily cap and run labels
+
+The relay can stop runaway spend and tell runs apart:
+
+```sh
+python3 relay.py --cap 15            # refuse model calls once today's list-price spend reaches $15 (429, clear message)
+python3 relay.py --cap off
+python3 relay.py --label "giza-hydrogen"   # tag every call from now on
+python3 relay.py --label off
+python3 relay.py --cost              # totals per model, today's spend, and per label
+```
+
+The dashboard shows today's spend against the cap and a label column. Prices are Google's list prices for the
+Standard tier; every call so far reported `serviceTier: standard`, and Gemini 4 has one price at any prompt length.
+What the relay cannot see: agy started without the `agy` function (it then talks to Google directly) and other tools
+that use the same key. Google's own usage page for the key's project is the full record, a few hours behind.
+For teams that want per-user budgets and a database, a gateway like LiteLLM does that; this relay stays one file.
+
 ## The output limit (why Carbon can fail on big files without this)
 
 agy asks gateway models for only 8,192 output tokens per reply. At high effort Carbon's thinking uses most of that, so

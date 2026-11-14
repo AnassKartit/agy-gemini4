@@ -7,7 +7,12 @@ Gemini API key.** Works in the `agy` CLI and the Antigravity desktop app, with a
 
 ## The short version (terminal only, nothing to install)
 
-Measured on `agy` 1.5.5, 11 November 2026, with `"modelProvider": "gemini"` in `~/.gemini/antigravity-cli/settings.json`
+**agy 1.5.8 and later:** Carbon is built in for API keys. Measured on agy 1.5.9, 14 November 2026, with no relay and
+no extra settings: `GEMINI_API_KEY=... agy --model gemini-4-carbon --effort high` answers at low, medium and high
+effort (xhigh is not offered for Carbon). Update with the CLI's own updater and you may not need anything here; the
+installer is still useful for the cost dashboard, the key in the Keychain and the desktop app.
+
+**agy 1.5.5 to 1.5.7:** measured on `agy` 1.5.5, 11 November 2026, with `"modelProvider": "gemini"` in `~/.gemini/antigravity-cli/settings.json`
 (Google's documented API-key mode):
 
 - **Gemini 4 Argon** already works on an API key: `agy --model gemini-4-argon`.
@@ -65,7 +70,8 @@ agy asks gateway models for only 8,192 output tokens per reply. At high effort C
 a long file never gets written: on 11 November 2026 a Carbon run in agy 1.5.5 stopped after 21 minutes with "Your
 previous response was cut off because it exceeded the output token limit. Output retries exhausted after 4 attempts".
 The relay raises the limit to 65,536 for Gemini 4 models (the usage log keeps both numbers). To keep agy's own limit,
-create the empty file `~/.agy-gemini4/keep_output_limit`.
+create the empty file `~/.agy-gemini4/keep_output_limit`. agy 1.5.9 already asks for 65,536 itself (measured
+14 November 2026 in the usage log), so on recent versions this changes nothing.
 
 ## What the relay is for
 
@@ -102,6 +108,8 @@ after 2026-11-30); other models are counted with their tokens and shown as "no p
 | `setup.sh`, `--remove`, reinstall | macOS | 2026-11-11 | works |
 | agy on Carbon, Argon, 3.8 Flash through the relay, key from the Keychain | agy 1.5.5 | 2026-11-11 | works |
 | agy on Carbon with the two settings only, no relay | agy 1.5.5 | 2026-11-11 | works |
+| agy on Carbon through the relay, effort low / medium / high | agy 1.5.9 | 2026-11-14 | works |
+| agy on Carbon on the key alone, no relay, no gateway settings, effort low / medium / high | agy 1.5.9 | 2026-11-14 | works |
 | Desktop app on Argon through an earlier version of this relay | app, October 2026 | 2026-10-19 | worked |
 | Desktop app with this installer | app 2.24.0 | | not tested yet |
 
@@ -110,6 +118,9 @@ after 2026-11-30); other models are counted with their tokens and shown as "no p
 - **No Gemini model found on this key:** turn on billing for the key's project in AI Studio.
 - **`agy` does not show the new models:** open a new terminal (the `agy` function is in `~/.zshrc`).
 - **Desktop app does not show them:** quit it fully (Cmd+Q) and reopen it.
+- **An agy session stopped answering:** check `~/.gemini/antigravity-cli/log/` for `CLI program exited`. A closed
+  terminal tab ends the session (signal: hangup); the conversation is kept: `agy -c` (most recent) or
+  `agy --conversation <id>` reopens it.
 - **Relay log:** `~/.agy-gemini4/relay.log`. Rejected requests (400) are saved to `~/.agy-gemini4/rejected/`
   without your key.
 

@@ -173,13 +173,19 @@ foreach ($p in $Profiles) {
   if ((Test-Path $p) -and (Get-Content $p -Raw) -and -not (Get-Content $p -Raw).EndsWith("`n")) { Add-Content -Path $p -Value "" }
   Add-Content -Path $p -Value $fn -Encoding UTF8
 }
-# profiles only load when scripts may run; Windows' default for clients is Restricted
-if ((Get-ExecutionPolicy -Scope CurrentUser) -eq "Undefined" -and (Get-ExecutionPolicy) -in "Restricted", "AllSigned") {
-  try {
-    Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned -Force
+# profiles only load when scripts may run; Windows' default for clients is Restricted. Judge the policy a NEW window
+# gets: without the Process scope, which `powershell -ExecutionPolicy Bypass -File .\setup.ps1` sets to Bypass for this run only
+$NewWindowPolicy = @("MachinePolicy", "UserPolicy", "CurrentUser", "LocalMachine" | ForEach-Object { "$(Get-ExecutionPolicy -Scope $_)" }) |
+  Where-Object { $_ -ne "Undefined" } | Select-Object -First 1
+if (-not $NewWindowPolicy) { $NewWindowPolicy = if ((Get-CimInstance Win32_OperatingSystem).ProductType -eq 1) { "Restricted" } else { "RemoteSigned" } }
+if ((Get-ExecutionPolicy -Scope CurrentUser) -eq "Undefined" -and $NewWindowPolicy -in "Restricted", "AllSigned") {
+  # When this run is itself Bypass (powershell -ExecutionPolicy Bypass -File ...), Set-ExecutionPolicy saves the
+  # CurrentUser value AND throws "overridden by a policy defined at a more specific scope". Judge by reading it back.
+  try { Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned -Force -ErrorAction Stop } catch { }
+  if ((Get-ExecutionPolicy -Scope CurrentUser) -eq "RemoteSigned") {
     New-Item -ItemType File -Force -Path (Join-Path $HomeDir "execution_policy_set") | Out-Null
     Write-Host "PowerShell may now run your profile (execution policy RemoteSigned for your user)."
-  } catch { Write-Host "Your execution policy blocks the PowerShell profile: run agy from a new window after allowing it." }
+  } else { Write-Host "Your execution policy blocks the PowerShell profile: allow it with Set-ExecutionPolicy -Scope CurrentUser RemoteSigned, then open a new window." }
 }
 
 $ok = $false

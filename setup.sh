@@ -37,7 +37,7 @@ except ValueError: ms = []
 names = [m["name"].split("/")[-1] for m in ms if "generateContent" in m.get("supportedGenerationMethods", [])]
 g4 = sorted((n for n in names if re.fullmatch(r"gemini-4-[a-z]+", n)), key=lambda n: (n != "gemini-4-carbon", n))
 flash = sorted((n for n in names if re.fullmatch(r"gemini-\d+\.\d+-flash", n)), key=lambda n: [int(x) for x in re.findall(r"\d+", n)])
-g4 = [v for n in g4 for v in (n, n + "-low", n + "-high")]   # each model at medium (its plain name), low and high: agy and the app show them as efforts
+g4 = [v for n in g4 for v in (n, n + "-low", n + "-high") + ((n + "-xhigh",) if n == "gemini-4-hydrogen" else ())]   # medium (plain name), low, high; Hydrogen also xhigh (Carbon refuses it, tested 2026-11-15)
 print(",".join(g4 + flash[-1:]))')
 [ -n "$FOUND" ] || { echo "  no Gemini model found on this key (is billing on for its project?)"; exit 1; }
 [ -n "$MODELS" ] || MODELS="$FOUND"

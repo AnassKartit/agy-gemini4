@@ -17,7 +17,7 @@ from pathlib import Path
 
 UPSTREAM = "https://generativelanguage.googleapis.com"
 CTX = ssl.create_default_context(cafile="/etc/ssl/cert.pem")
-MODEL_RE = re.compile(r"models/(gemini-[a-z0-9.\-]+?)-(low|medium|high)(?=[:/?]|$)")  # effort glued to the name
+MODEL_RE = re.compile(r"models/(gemini-[a-z0-9.\-]+?)-(low|medium|high|xhigh)(?=[:/?]|$)")  # effort glued to the name (xhigh: Hydrogen only)
 HOP = {"host", "content-length", "connection", "accept-encoding", "transfer-encoding"}
 def _key():
     if os.environ.get("GEMINI_API_KEY"):

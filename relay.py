@@ -11,6 +11,7 @@ Your key is read from GEMINI_API_KEY or from the macOS Keychain (item "agy-gemin
 `python3 relay.py --cost` prints what your calls cost at Google's list price.
 """
 import argparse, json, os, re, ssl, time, urllib.error, urllib.request
+import http.client
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 

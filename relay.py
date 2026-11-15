@@ -4,24 +4,61 @@ with your own Gemini API key.
 Why it is needed: on an API key, Antigravity lists only older models. Its gateway mode (AGY_LLM_GATEWAY_URL +
 AGY_LLM_GATEWAY_MODELS) can offer Gemini 4, but it sends the model as "gemini-4-carbon-high" (effort glued on), which
 the Gemini API rejects with 404, and the desktop app sends the key as a Bearer token, which the API rejects with 401.
-This relay runs on your Mac (127.0.0.1 only), fixes those two things, forwards everything else unchanged to
+This relay runs on your computer (127.0.0.1 only), fixes those two things, forwards everything else unchanged to
 generativelanguage.googleapis.com, and writes Google's token counts for every call to a local usage file.
 
-Your key is read from GEMINI_API_KEY or from the macOS Keychain (item "agy-gemini4"), never written into app settings.
+Your key is read from GEMINI_API_KEY, the macOS Keychain or the Windows Credential Manager (item "agy-gemini4"), never
+written into app settings.
 `python3 relay.py --cost` prints what your calls cost at Google's list price.
 """
-import argparse, json, os, re, ssl, time, urllib.error, urllib.request
+import argparse, json, os, re, ssl, sys, time, urllib.error, urllib.request
 import http.client
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 UPSTREAM = "https://generativelanguage.googleapis.com"
-CTX = ssl.create_default_context(cafile="/etc/ssl/cert.pem")
+# macOS: the system CA file; Windows and Linux: the default store (Windows reads its own certificate store)
+CTX = ssl.create_default_context(cafile="/etc/ssl/cert.pem") if os.path.exists("/etc/ssl/cert.pem") else ssl.create_default_context()
 MODEL_RE = re.compile(r"models/(gemini-[a-z0-9.\-]+?)-(low|medium|high|xhigh)(?=[:/?]|$)")  # effort glued to the name (xhigh: Hydrogen only)
 HOP = {"host", "content-length", "connection", "accept-encoding", "transfer-encoding"}
+def _windows_credential(target="agy-gemini4"):
+    """The password of the generic credential `target` in the Windows Credential Manager (setup.ps1 writes it), or ""."""
+    import ctypes
+    from ctypes import wintypes
+
+    class CREDENTIAL(ctypes.Structure):
+        _fields_ = [("Flags", wintypes.DWORD), ("Type", wintypes.DWORD), ("TargetName", wintypes.LPWSTR),
+                    ("Comment", wintypes.LPWSTR), ("LastWritten", wintypes.FILETIME),
+                    ("CredentialBlobSize", wintypes.DWORD), ("CredentialBlob", ctypes.POINTER(ctypes.c_ubyte)),
+                    ("Persist", wintypes.DWORD), ("AttributeCount", wintypes.DWORD), ("Attributes", ctypes.c_void_p),
+                    ("TargetAlias", wintypes.LPWSTR), ("UserName", wintypes.LPWSTR)]
+    adv = ctypes.WinDLL("advapi32", use_last_error=True)
+    adv.CredReadW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.POINTER(ctypes.POINTER(CREDENTIAL))]
+    adv.CredReadW.restype = wintypes.BOOL
+    adv.CredFree.argtypes = [ctypes.c_void_p]
+    p = ctypes.POINTER(CREDENTIAL)()
+    if not adv.CredReadW(target, 1, 0, ctypes.byref(p)):   # 1 = CRED_TYPE_GENERIC
+        return ""
+    try:
+        blob = ctypes.string_at(p.contents.CredentialBlob, p.contents.CredentialBlobSize)
+    finally:
+        adv.CredFree(p)
+    # setup.ps1 and cmdkey store the password as UTF-16LE; accept UTF-8 too
+    try:
+        text = blob.decode("utf-16-le") if len(blob) % 2 == 0 and b"\x00" in blob else blob.decode("utf-8")
+    except UnicodeDecodeError:
+        text = blob.decode("utf-8", "replace")
+    return text.strip()
+
+
 def _key():
     if os.environ.get("GEMINI_API_KEY"):
         return os.environ["GEMINI_API_KEY"]
+    if os.name == "nt":
+        try:
+            return _windows_credential()
+        except (OSError, AttributeError, ValueError):
+            return ""
     try:
         import subprocess
         return subprocess.run(["security", "find-generic-password", "-s", "agy-gemini4", "-w"],
@@ -356,6 +393,8 @@ if __name__ == "__main__":
         cost(a.ledger)
         raise SystemExit
     os.makedirs(os.path.dirname(a.ledger), exist_ok=True)
+    if sys.stderr is None:   # started windowless (pythonw.exe, the Windows logon task): log next to the usage file
+        sys.stdout = sys.stderr = open(os.path.join(os.path.dirname(a.ledger), "relay.log"), "a", buffering=1)
     srv = ThreadingHTTPServer(("127.0.0.1", a.port), Relay)
     srv.ledger = a.ledger
     print(f"agy-gemini4 relay on http://127.0.0.1:{a.port} -> {UPSTREAM}", flush=True)

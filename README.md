@@ -49,6 +49,36 @@ What `setup.sh` does:
 
 `./setup.sh --remove` undoes all of it, including the Keychain item.
 
+## The installer on Windows (PowerShell 5.1 or 7)
+
+You need Python 3 from [python.org](https://www.python.org/downloads/windows/) (the Microsoft Store placeholder does not
+count) and Antigravity from [antigravity.google/download](https://antigravity.google/download) (the CLI:
+`irm https://antigravity.google/cli/install.ps1 | iex`). Then, in PowerShell:
+
+```powershell
+git clone https://github.com/AnassKartit/agy-gemini4; cd agy-gemini4
+powershell -ExecutionPolicy Bypass -File .\setup.ps1
+```
+
+Open a new PowerShell, run `agy`, type `/model`. Quit the desktop app fully (also from the tray) and reopen it.
+Dashboard: **http://127.0.0.1:8918**. `.\setup.ps1 -Models gemini-4-carbon,gemini-3.7-flash` sets your own list;
+`.\setup.ps1 -Remove` undoes all of it, including the stored key.
+
+What is different on Windows:
+
+| | macOS (`setup.sh`) | Windows (`setup.ps1`) |
+|---|---|---|
+| Your key | Keychain item `agy-gemini4` | Credential Manager, generic credential `agy-gemini4` (Control Panel > Credential Manager > Windows Credentials) |
+| Relay at login | LaunchAgent `net.agy-gemini4.relay` | Task Scheduler task `agy-gemini4 relay` (`pythonw.exe`, no window, restarted if it stops) |
+| Settings for the desktop app | LaunchAgent `net.agy-gemini4.env` (`launchctl setenv`) | user environment variables `AGY_LLM_GATEWAY_URL`, `AGY_LLM_GATEWAY_MODELS`, `AGY_LLM_GATEWAY_API_KEY` |
+| `agy` function | `~/.zshrc` | PowerShell profile (5.1 and 7); if your execution policy is Restricted, it is set to RemoteSigned for your user so the profile loads (`-Remove` puts it back) |
+| Files | `~/.agy-gemini4/` | `%USERPROFILE%\.agy-gemini4\` (usage log, cap, label, `relay.log`) |
+
+Everything else is the same: the model check, the menu (Low, Medium, High; Hydrogen also XHigh), the relay, the
+dashboard, the cap and labels (`python relay.py --cost`, `--cap`, `--label`). The user variables are also seen by `agy`
+started from cmd or another shell; the `agy` function adds `GEMINI_API_KEY=relay` and `GOOGLE_GEMINI_BASE_URL` on top,
+as on macOS.
+
 ## Model and effort
 
 Pick any model in the menu (`/model`, or `agy --model ...`) and any effort (`--effort low|medium|high`). The relay
@@ -102,7 +132,7 @@ create the empty file `~/.agy-gemini4/keep_output_limit`. agy 1.5.9 already asks
 ## What the relay is for
 
 `relay.py` is one Python file with no dependencies. It forwards requests unchanged to
-`generativelanguage.googleapis.com`, adds your key from the Keychain, and writes Google's own token counts for every
+`generativelanguage.googleapis.com`, adds your key from the Keychain (Windows: the Credential Manager), and writes Google's own token counts for every
 call to `~/.agy-gemini4/usage.jsonl`. It also repairs three request shapes the Gemini API rejects, which I hit on
 earlier Antigravity versions (agy 1.4.0 and the desktop app, October 2026):
 
@@ -141,12 +171,17 @@ Carbon and Argon after 2026-11-30); other models are counted with their tokens a
 | agy on Carbon on the key alone, no relay, no gateway settings, effort low / medium / high | agy 1.5.9 | 2026-11-14 | works |
 | Desktop app on Argon through an earlier version of this relay | app, October 2026 | 2026-10-19 | worked |
 | Desktop app with this installer | app 2.24.0 | | not tested yet |
+| `setup.ps1` on Windows (CLI and desktop app) | Windows 11 ARM64 | | not tested yet: written and checked for syntax (PowerShell 7.7) only |
+| `relay.py` with the Windows changes, on macOS (key from the Keychain) | macOS | 2026-11-15 | works |
 
 ## Troubleshooting
 
 - **No Gemini model found on this key:** turn on billing for the key's project in AI Studio.
 - **`agy` does not show the new models:** open a new terminal (the `agy` function is in `~/.zshrc`).
-- **Desktop app does not show them:** quit it fully (Cmd+Q) and reopen it.
+- **Desktop app does not show them:** quit it fully (Cmd+Q; on Windows also from the tray) and reopen it.
+- **Windows: `agy` is not the function** (`Get-Command agy` shows an Application): your profile did not load; check
+  `Get-ExecutionPolicy -List` and open a new PowerShell.
+- **Windows: relay not running:** `Start-ScheduledTask "agy-gemini4 relay"`; log in `%USERPROFILE%\.agy-gemini4\relay.log`.
 - **An agy session stopped answering:** check `~/.gemini/antigravity-cli/log/` for `CLI program exited`. A closed
   terminal tab ends the session (signal: hangup); the conversation is kept: `agy -c` (most recent) or
   `agy --conversation <id>` reopens it.

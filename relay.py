@@ -138,6 +138,10 @@ class Relay(BaseHTTPRequestHandler):
             # The app has no effort picker on a gateway model and always asks HIGH (10 to 20 s a step, measured); a word in THINKING_OVERRIDE (low, medium, high) replaces it for Argon calls.
             try:
                 j = json.loads(body)
+                tcfg = j.get("generationConfig", {}).get("thinkingConfig", {})
+                if str(tcfg.get("thinkingLevel", "")).upper() == "MINIMAL" and "gemini-3.8-flash" in path:
+                    tcfg["thinkingLevel"] = "LOW"   # agy's side calls ask MINIMAL, which gemini-3.8-flash rejects (400)
+                    body = json.dumps(j).encode()
                 over = THINKING_OVERRIDE.read_text().strip().upper() if THINKING_OVERRIDE.exists() else ""
                 if over and ("gemini-4-argon" in path or "gemini-4-carbon" in path):
                     j.setdefault("generationConfig", {}).setdefault("thinkingConfig", {})["thinkingLevel"] = over

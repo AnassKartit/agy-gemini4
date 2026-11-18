@@ -74,7 +74,7 @@ What is different on Windows:
 | `agy` function | `~/.zshrc` | PowerShell profile (5.1 and 7); if your execution policy is Restricted, it is set to RemoteSigned for your user so the profile loads (`-Remove` puts it back) |
 | Files | `~/.agy-gemini4/` | `%USERPROFILE%\.agy-gemini4\` (usage log, cap, label, `relay.log`) |
 
-Everything else is the same: the model check, the menu (Low, Medium, High; Hydrogen also XHigh), the relay, the
+Everything else is the same: the model check, the menu (Low, Medium, High; Hydrogen and Neon also XHigh), the relay, the
 dashboard, the cap and labels (`python relay.py --cost`, `--cap`, `--label`). The user variables are also seen by `agy`
 started from cmd or another shell; the `agy` function adds `GEMINI_API_KEY=relay` and `GOOGLE_GEMINI_BASE_URL` on top,
 as on macOS.
@@ -155,9 +155,12 @@ Gemini 4 Carbon and Argon are paid-tier only. List prices per 1M tokens
 Gemini 4 Hydrogen (same page, 14 November 2026): $1.50 input, $0.075 cached input, $7.50 output per 1M tokens, no
 change announced.
 
+Gemini 4 Neon (same page, 18 November 2026; between Hydrogen and Carbon, paid tier only): $3.00 input, $0.15 cached
+input, $15.00 output per 1M tokens, no introductory price.
+
 Measured: a playable one-file snake game built by agy on Carbon took 3 calls and cost **$0.12**. An agent re-sends its
 whole context at every step, so long sessions add up; most of it is billed at the cached price.
-`python3 relay.py --cost` prints your total. `relay.py` holds prices for Carbon, Argon and Hydrogen (`PRICE`; update
+`python3 relay.py --cost` prints your total. `relay.py` holds prices for Carbon, Argon, Hydrogen and Neon (`PRICE`; update
 Carbon and Argon after 2026-11-30); other models are counted with their tokens and shown as "no price set".
 
 ## Tested

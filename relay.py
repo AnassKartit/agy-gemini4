@@ -19,7 +19,7 @@ from pathlib import Path
 UPSTREAM = "https://generativelanguage.googleapis.com"
 # macOS: the system CA file; Windows and Linux: the default store (Windows reads its own certificate store)
 CTX = ssl.create_default_context(cafile="/etc/ssl/cert.pem") if os.path.exists("/etc/ssl/cert.pem") else ssl.create_default_context()
-MODEL_RE = re.compile(r"models/(gemini-[a-z0-9.\-]+?)-(low|medium|high|xhigh)(?=[:/?]|$)")  # effort glued to the name (xhigh: Hydrogen only)
+MODEL_RE = re.compile(r"models/(gemini-[a-z0-9.\-]+?)-(low|medium|high|xhigh)(?=[:/?]|$)")  # effort glued to the name (xhigh: Hydrogen and Neon)
 HOP = {"host", "content-length", "connection", "accept-encoding", "transfer-encoding"}
 def _windows_credential(target="agy-gemini4"):
     """The password of the generic credential `target` in the Windows Credential Manager (setup.ps1 writes it), or ""."""
@@ -287,7 +287,8 @@ class Relay(BaseHTTPRequestHandler):
 
 # list price per 1M tokens (aistudio.google.com/docs/pricing): input, cached input, output incl. thinking
 PRICE = {"gemini-4-carbon": (2.00, 0.10, 10.00), "gemini-4-argon": (2.00, 0.10, 10.00),  # until 2026-11-30; x2 after
-         "gemini-4-hydrogen": (1.50, 0.075, 7.50)}                                       # no change announced
+         "gemini-4-hydrogen": (1.50, 0.075, 7.50),                                       # no change announced
+         "gemini-4-neon": (3.00, 0.15, 15.00)}                                           # 2026-11-18, no intro price
 
 
 def call_cost(r):

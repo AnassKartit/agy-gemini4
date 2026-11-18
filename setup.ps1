@@ -124,8 +124,8 @@ $g4 = @($names | Where-Object { $_ -cmatch "^gemini-4-[a-z]+$" } |
 $flash = @($names | Where-Object { $_ -cmatch "^gemini-\d+\.\d+-flash$" } |
   Sort-Object @{ Expression = { [int]($_ -replace "^gemini-(\d+)\.\d+-flash$", '$1') } },
               @{ Expression = { [int]($_ -replace "^gemini-\d+\.(\d+)-flash$", '$1') } })
-# medium (plain name), low, high; Hydrogen also xhigh (Carbon refuses it, tested 2026-11-15)
-$menu = @(foreach ($n in $g4) { $n; "$n-low"; "$n-high"; if ($n -eq "gemini-4-hydrogen") { "$n-xhigh" } })
+# medium (plain name), low, high; Hydrogen and Neon also xhigh (Carbon refuses it, tested 2026-11-15)
+$menu = @(foreach ($n in $g4) { $n; "$n-low"; "$n-high"; if ($n -in @("gemini-4-hydrogen", "gemini-4-neon")) { "$n-xhigh" } })
 if ($flash.Count) { $menu += $flash[-1] }
 $Found = $menu -join ","
 if (-not $Found) { Write-Host "  no Gemini model found on this key (is billing on for its project?)"; exit 1 }

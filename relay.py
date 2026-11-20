@@ -176,6 +176,12 @@ class Relay(BaseHTTPRequestHandler):
             try:
                 j = json.loads(body)
                 tcfg = j.get("generationConfig", {}).get("thinkingConfig", {})
+                if "/gemini-4-" in path and not tcfg.get("thinkingLevel") and tcfg.get("thinkingBudget") is None:
+                    # a model newer than the client (Neon in agy 1.5.11) gets no effort, and Google then uses the
+                    # model's own default (HIGH for Neon); the plain name means MEDIUM in our menu, so say so
+                    j.setdefault("generationConfig", {}).setdefault("thinkingConfig", {})["thinkingLevel"] = "MEDIUM"
+                    tcfg = j["generationConfig"]["thinkingConfig"]
+                    body = json.dumps(j).encode()
                 if str(tcfg.get("thinkingLevel", "")).upper() == "MINIMAL" and "gemini-3.8-flash" in path:
                     tcfg["thinkingLevel"] = "LOW"   # agy's side calls ask MINIMAL, which gemini-3.8-flash rejects (400)
                     body = json.dumps(j).encode()
